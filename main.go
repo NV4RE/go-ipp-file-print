@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/caarlos0/env/v11"
-	"github.com/fsnotify/fsnotify"
 	"github.com/phin1x/go-ipp"
-	"golang.org/x/sync/singleflight"
 	"log"
 	"os"
 	"path/filepath"
@@ -41,11 +39,6 @@ func (i IppPrinterManager) Print(file string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 
-	if fi, err := os.Stat(file); err == nil && fi.IsDir() {
-		fmt.Println("is dir, skipping")
-		return nil
-	}
-
 	// if file extension not in list, skip (pdf, png, jpg, jpeg, pwg, pcl)
 	if !regexp.MustCompile(`(?i)\.(pdf|png|jpg|jpeg|pwg|pcl)$`).MatchString(file) {
 		fmt.Println("file extension not in list, skipping")
@@ -72,50 +65,33 @@ func (i IppPrinterManager) Print(file string) error {
 }
 
 func (i IppPrinterManager) WatchFiles(ctx context.Context) error {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
-	}
-	defer watcher.Close()
-
-	var group singleflight.Group
-
-	// Start listening for events.
-	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-				log.Printf("new file: %+v\n", event)
-
-				if event.Has(fsnotify.Write) {
-					group.Do(event.Name, func() (interface{}, error) {
-						time.Sleep(3 * time.Second)
-						return nil, i.Print(event.Name)
-					})
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				log.Println("error:", err)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			if err := i.PrintAll(); err != nil {
+				log.Println(err)
 			}
+			time.Sleep(1 * time.Second)
 		}
-	}()
 
-	// Add a path.
-	err = watcher.Add(i.uploadPath)
-	if err != nil {
-		return err
 	}
+}
 
-	// Block main goroutine forever.
-	<-ctx.Done()
+func (i IppPrinterManager) PrintAll() error {
+	return filepath.Walk(i.uploadPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
 
-	return nil
+		if !info.IsDir() {
+			i.Print(path)
+		}
 
+		return nil
+
+	})
 }
 
 func NewIppPrinterManager(client *ipp.IPPClient, printerName, rootFolder string) (*IppPrinterManager, error) {
@@ -138,21 +114,6 @@ func NewIppPrinterManager(client *ipp.IPPClient, printerName, rootFolder string)
 		return nil, err
 	}
 	if err := os.MkdirAll(ipm.failedPath, 0755); err != nil {
-		return nil, err
-	}
-
-	if err := filepath.Walk(ipm.uploadPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if !info.IsDir() {
-			ipm.Print(path)
-		}
-
-		return nil
-
-	}); err != nil {
 		return nil, err
 	}
 
