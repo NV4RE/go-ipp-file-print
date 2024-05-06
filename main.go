@@ -85,9 +85,11 @@ func (i IppPrinterManager) PrintAll() error {
 			return err
 		}
 
-		if !info.IsDir() {
-			i.Print(path)
+		if info.IsDir() {
+			return nil
 		}
+
+		i.Print(path)
 
 		return nil
 
@@ -132,6 +134,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	log.Println("Starting file watcher")
 
 	if err := ipm.WatchFiles(context.Background()); err != nil {
 		log.Fatal(err)
