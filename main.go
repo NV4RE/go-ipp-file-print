@@ -89,6 +89,7 @@ func (i IppPrinterManager) PrintAll() error {
 			return nil
 		}
 
+		time.Sleep(3 * time.Second)
 		i.Print(path)
 
 		return nil
