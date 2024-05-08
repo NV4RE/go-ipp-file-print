@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/caarlos0/env/v11"
 	"github.com/phin1x/go-ipp"
@@ -21,7 +22,8 @@ type config struct {
 	IppUser      string `env:"PRINTER_USER" envDefault:""`
 	IppPass      string `env:"PRINTER_PASS" envDefault:""`
 	IppTls       bool   `env:"PRINTER_TLS" envDefault:"false"`
-	TppPrinter   string `env:"PRINTER_NAME" envDefault:"Printer"`
+	IppPrinter   string `env:"PRINTER_NAME" envDefault:"Printer"`
+	IppJobAttrs  string `env:"PRINTER_JOB_ATTRS" envDefault:"{}"`
 	FileRootPath string `env:"FILE_ROOT_PATH" envDefault:"./files"`
 }
 
@@ -33,6 +35,8 @@ type IppPrinterManager struct {
 	uploadPath  string
 	printedPath string
 	failedPath  string
+
+	defaultJobAttrs map[string]any
 }
 
 func (i IppPrinterManager) Print(file string) error {
@@ -47,7 +51,7 @@ func (i IppPrinterManager) Print(file string) error {
 
 	var err error
 	jId := 0
-	if jId, err = i.client.PrintFile(file, i.printerName, map[string]interface{}{}); err != nil {
+	if jId, err = i.client.PrintFile(file, i.printerName, i.defaultJobAttrs); err != nil {
 		os.Rename(file, strings.Replace(file, "/upload/", fmt.Sprintf("/failed/%s/", time.Now().Format("2006-01-02")), 1))
 		return err
 	}
@@ -97,7 +101,7 @@ func (i IppPrinterManager) PrintAll() error {
 	})
 }
 
-func NewIppPrinterManager(client *ipp.IPPClient, printerName, rootFolder string) (*IppPrinterManager, error) {
+func NewIppPrinterManager(client *ipp.IPPClient, printerName, rootFolder string, jobAttr map[string]any) (*IppPrinterManager, error) {
 	ipm := &IppPrinterManager{
 		client:      client,
 		printerName: printerName,
@@ -131,7 +135,12 @@ func main() {
 
 	client := ipp.NewIPPClient(cfg.IppHost, cfg.IppPort, cfg.IppUser, cfg.IppPass, cfg.IppTls)
 
-	ipm, err := NewIppPrinterManager(client, cfg.TppPrinter, cfg.FileRootPath)
+	jobAttrs := make(map[string]any)
+	if err := json.Unmarshal([]byte(cfg.IppJobAttrs), &jobAttrs); err != nil {
+		log.Printf("Failed to parse job attributes: %s\n", err)
+	}
+
+	ipm, err := NewIppPrinterManager(client, cfg.IppPrinter, cfg.FileRootPath, jobAttrs)
 	if err != nil {
 		log.Fatal(err)
 	}
