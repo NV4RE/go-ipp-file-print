@@ -1,16 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"github.com/caarlos0/env/v11"
 	"github.com/phin1x/go-ipp"
-	"github.com/unidoc/unipdf/v3/creator"
-	"github.com/unidoc/unipdf/v3/model"
 	"log"
+	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -42,76 +42,8 @@ type IppPrinterManager struct {
 	defaultJobAttrs map[string]any
 }
 
-func (i IppPrinterManager) printPdf(file string) (int, error) {
-	// Read the PDF file
-	pdfReader, f, err := model.NewPdfReaderFromFile(file, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-
-	// Get the number of pages
-	numPages, err := pdfReader.GetNumPages()
-	if err != nil {
-		return 0, err
-	}
-
-	// Create a new PDF creator
-	c := creator.New()
-	page, err := pdfReader.GetPage(1)
-	if err != nil {
-		return 0, err
-	}
-	c.SetPageSize(creator.PageSize{page.MediaBox.Width(), page.MediaBox.Height()})
-
-	// Add print info and watermark to the first and last pages
-	addPrintInfo := func(page *model.PdfPage, pageNum int) error {
-		p := c.NewParagraph(
-			fmt.Sprintf(
-				`Filename: %s
-Printed on: %s
-Total pages: %d
-`, file))
-		p.SetFontSize(10)
-		p.SetMargins(10, 10, 10, 10)
-
-		return c.Draw(p)
-	}
-
-	fp := c.NewPage()
-	_ = addPrintInfo(fp, numPages)
-	_ = c.AddPage(fp)
-
-	for p := 1; p <= numPages+1; p++ {
-		page, err := pdfReader.GetPage(p)
-		if err != nil {
-			return 0, err
-		}
-
-		// Add the page to the PDF
-		c.AddPage(page)
-	}
-
-	lp := c.NewPage()
-	_ = addPrintInfo(lp, numPages)
-	_ = c.AddPage(lp)
-
-	// Write the PDF to a buffer
-	var b bytes.Buffer
-	if err := c.Write(&b); err != nil {
-		return 0, err
-	}
-
-	// Print the PDF using IPP
-	doc := ipp.Document{
-		Name:     file,
-		MimeType: "application/pdf",
-		Document: &b,
-		Size:     b.Len(),
-	}
-
-	return i.client.PrintJob(doc, i.printerName, i.defaultJobAttrs)
-}
+//go:embed img.png
+var img []byte
 
 func (i IppPrinterManager) Print(file string) error {
 	i.mu.Lock()
@@ -123,19 +55,39 @@ func (i IppPrinterManager) Print(file string) error {
 		return nil
 	}
 
-	var (
-		err error
-		jId int
-	)
-
-	// if file extension is pdf, print it
-	if regexp.MustCompile(`(?i)\.pdf$`).MatchString(file) {
-		jId, err = i.printPdf(file)
-	} else {
-		// if file extension is not pdf, convert it to pdf and print it
-		jId, err = i.printPdf(strings.Replace(file, filepath.Ext(file), ".pdf", 1))
+	fileStats, err := os.Stat(file)
+	if err != nil {
+		return err
 	}
 
+	fileName := path.Base(file)
+	document, err := os.Open(file)
+	if err != nil {
+		return err
+	}
+	defer document.Close()
+
+	ja := map[string]any{
+		ipp.AttributeJobName: fileName,
+	}
+	maps.Copy(ja, i.defaultJobAttrs)
+
+	docs := []ipp.Document{
+		{
+			Document: document,
+			Name:     fileName,
+			Size:     int(fileStats.Size()),
+			MimeType: ipp.MimeTypeOctetStream,
+		},
+		{
+			Document: strings.NewReader(string(img)),
+			Name:     "img.png",
+			Size:     len(img),
+			MimeType: ipp.MimeTypeOctetStream,
+		},
+	}
+
+	jId, err := i.client.PrintDocuments(docs, i.printerName, ja)
 	if err != nil {
 		os.Rename(file, strings.Replace(file, "/upload/", fmt.Sprintf("/failed/%s_", time.Now().Format("2006-01-02")), 1))
 		return err
